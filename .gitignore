@@ -1,6 +1,7 @@
 /.ipynb_checkpoints
 /.vscode
 /venv
+/.venv
 /.idea/
 /data/raw/dblp.v12.json
 /data/preprocessed/dblp/dblp.v12.json.filtered.mt120.ts3/*

@@ -27,6 +27,37 @@ from mdl.caser import Caser
 from mdl.rrn import Rrn
 from cmn.tools import generate_popular_and_nonpopular
 
+class ChronologicalMixin:
+    """Mixin class to add chronological ordering functionality"""
+    def get_chronological_indices(self, train_idx, indexes):
+        # Get year for each team
+        team_years = [indexes['i2y'][i][0] for i in range(len(indexes['i2y']))]
+        
+        # Create pairs of indices and years for training data
+        train_with_years = [(idx, team_years[idx]) for idx in train_idx]
+        
+        # Sort by year
+        train_with_years.sort(key=lambda x: x[1])
+        
+        # Extract sorted indices
+        return [pair[0] for pair in train_with_years]
+
+class ChronologicalFnn(ChronologicalMixin, Fnn):
+    def train(self, train_idx, valid_idx, vecs, indexes, output, settings):
+        """Train the FNN model with data ordered chronologically by year"""
+        chronological_train_idx = self.get_chronological_indices(train_idx, indexes)
+        super().train(chronological_train_idx, valid_idx, vecs, indexes, output, settings)
+
+class ChronologicalBnn(ChronologicalMixin, Bnn):
+    def train(self, train_idx, valid_idx, vecs, indexes, output, settings):
+        """Train the BNN model with data ordered chronologically by year"""
+        chronological_train_idx = self.get_chronological_indices(train_idx, indexes)
+        super().train(chronological_train_idx, valid_idx, vecs, indexes, output, settings)
+
+
+
+################################################################################
+
 def create_evaluation_splits(n_sample, n_folds, train_ratio=0.85, year_idx=None, output='./', step_ahead=1):
     if year_idx:
         train = np.arange(year_idx[0][0], year_idx[-step_ahead][0])  # for teamporal folding, we do on each time interval ==> look at tntf.py
@@ -93,6 +124,10 @@ def run(data_list, domain_list, fair, filter, future, model_list, output, exp_id
     # model names starting with 't' means that they will follow the streaming scenario
     # model names ending with _a1 means that they have one 1 added to their input for time as aspect learning
     # model names having _dt2v means that they learn the input embedding with doc2vec where input is (skills + year)
+
+    # tgnn models
+    if 'tgnn_fnn' in model_list: models['tgnn_fnn'] = ChronologicalFnn()
+    if 'tgnn_bnn' in model_list: models['tgnn_bnn'] = ChronologicalBnn()
 
     # non-temporal (no streaming scenario, bag of teams)
     if 'random' in model_list: models['random'] = Rnd()

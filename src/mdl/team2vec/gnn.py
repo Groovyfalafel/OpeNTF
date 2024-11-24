@@ -10,14 +10,16 @@ from torch_geometric.data import Data, HeteroData
 import torch_geometric.transforms as T
 from torch_geometric.loader import LinkNeighborLoader
 
+
 from mdl.earlystopping import EarlyStopping
+
 from team2vec import Team2Vec
-from lant_encoder import Encoder as LANT_Encoder
+# from lant_encoder import Encoder as LANT_Encoder
 import params
 
 class Gnn(Team2Vec):
 
-    def __init__(self, teamsvecs, indexes, settings, output):
+    def __init__(self, teamsvecs=None, indexes=None, settings=None, output=None):
         super().__init__(teamsvecs, indexes, settings, output)
 
         self.loader = None
@@ -99,7 +101,6 @@ class Gnn(Team2Vec):
     # settings = the settings for this particular gnn model
     # emb_output = the path for the embedding output and model output storage
     def init_model(self, emb_output):
-
         # getting from the gnn params
         self.e = self.settings['e']
         self.d = self.settings['d']
@@ -109,16 +110,24 @@ class Gnn(Team2Vec):
         self.agg = self.settings['agg']
         self.dir = self.settings['dir']
         self.graph_type = self.settings['graph_types']
-        if self.model_name == 'han': self.metapaths = self.settings['metapaths'][self.graph_type]
+        if self.model_name == 'han':
+            self.metapaths = self.settings['metapaths'][self.graph_type]
 
-        # e.g : domain = 'imdb/title.basics.tsv.filtered.mt5.ts2'
-        # self.filepath = f'../../data/preprocessed/{domain}/gnn/{graph_type}.{dir}.{agg}.data.pkl'
         self.model_output = emb_output
-        if not os.path.isdir(self.model_output): os.makedirs(self.model_output)
+        if not os.path.isdir(self.model_output):
+            os.makedirs(self.model_output)
         self.is_directed = self.data.is_directed()
+
+        # Prepare data by adding node IDs
+        self.data = self.prepare_data(self.data)
 
         # initialize the model based on the param for training
         train_data, val_data, test_data, self.edge_types, self.rev_edge_types = self.define_splits(self.data)
+
+        # Prepare split data by adding node IDs
+        train_data = self.prepare_data(train_data)
+        val_data = self.prepare_data(val_data)
+        test_data = self.prepare_data(test_data)
 
         # create separate loaders for separate seed edge_types
         self.train_loader, self.val_loader, self.test_loader = {}, {}, {}
@@ -127,7 +136,6 @@ class Gnn(Team2Vec):
         for edge_type in params.settings['graph']['supervision_edge_types']:
             self.train_loader[edge_type] = self.create_mini_batch_loader(train_data, edge_type, 'train')
             self.val_loader[edge_type] = self.create_mini_batch_loader(val_data, edge_type, 'val')
-            # self.test_loader[edge_type] = self.create_mini_batch_loader(test_data, edge_type, 'test') # we dont need a test loader as of now
 
         print(f"Device: '{self.device}'")
         torch.cuda.empty_cache()
@@ -137,7 +145,7 @@ class Gnn(Team2Vec):
 
     def train(self, epochs, save_per_epoch=False):
         if self.model_name == 'lant':
-            self.model.learn(self, epochs) # built-in validation inside lant_encoder class
+            self.model.learn(self, epochs)
         else:
             self.learn(self.train_loader, epochs)
             self.eval(self.val_loader)
@@ -146,19 +154,17 @@ class Gnn(Team2Vec):
 
         # store the embeddings
         with torch.no_grad():
-            for node_type in self.data.node_types:
-                self.data[node_type].n_id = torch.arange(self.data[node_type].x.shape[0])
+            # Make sure node IDs are set before generating embeddings
+            self.data = self.prepare_data(self.data)
             self.data.to(self.device)
 
-            # for simplicity, we just pass seed_edge_type = edge_types[0]. This does not impact any output
+            # for simplicity, we just pass seed_edge_type = edge_types[0]
             emb = self.model(self.data, self.edge_types[0], self.is_directed, emb=True)
             embedding_output = f'{self.model_output}/{self.model_name}.{self.graph_type}.{"dir" if self.dir else "undir"}.{self.agg}.e{epochs}.ns{int(self.ns)}.b{self.b}.d{self.d}.emb.pt'
             torch.save(emb, embedding_output, pickle_protocol=4)
             print(f'\nsaved embedding as : {embedding_output} ..............\n')
-        # eval_batch(test_loader, is_directed)
+        
         torch.cuda.empty_cache()
-        # torch.save(self.model.state_dict(), f'{self.model_output}/gnn_model.pt', pickle_protocol=4)
-        #to load later by: self.model.load_state_dict(torch.load(f'{self.output}/gnn_model.pt'))
 
     # made specifically for the gnn training
     def plot_graph(self, x, y, *args, xlabel='Epochs', ylabel='Loss', title='Loss vs Epochs', fig_output='plot.png'):
@@ -177,12 +183,12 @@ class Gnn(Team2Vec):
         # plot.show()
 
     def define_splits(self, data):
-
-        if (type(data) == HeteroData):
+        """Define train/validation/test splits for the data"""
+        if isinstance(data, HeteroData):
             num_edge_types = len(data.edge_types)
-
-            # directed graph means we dont have any reverse edges
-            if (data.is_directed()):
+            
+            # Handle directed vs undirected graphs
+            if data.is_directed():
                 edge_types = data.edge_types
                 rev_edge_types = None
             else:
@@ -192,11 +198,12 @@ class Gnn(Team2Vec):
             edge_types = None
             rev_edge_types = None
 
+        # Create the data splits
         transform = T.RandomLinkSplit(
             num_val=0.1,
             num_test=0.0,
             disjoint_train_ratio=0.3,
-            neg_sampling_ratio=0.0,             # we leave negative sampling to the mini_batch_loaders
+            neg_sampling_ratio=0.0,  # We'll handle negative sampling in the loader
             add_negative_train_samples=False,
             edge_types=edge_types,
             rev_edge_types=rev_edge_types,
@@ -204,17 +211,24 @@ class Gnn(Team2Vec):
 
         train_data, val_data, test_data = transform(data)
 
+        # Validate the splits
         train_data.validate(raise_on_error=True)
         val_data.validate(raise_on_error=True)
         test_data.validate(raise_on_error=True)
 
-        # if han, add metapaths to the metadata
+        # Add metapaths for HAN if needed
         if self.model_name == 'han':
             from torch_geometric.transforms import AddMetaPaths
-            train_data = AddMetaPaths(metapaths=self.metapaths, drop_orig_edge_types=False,
-                                      drop_unconnected_node_types=False)(train_data)
-            val_data = AddMetaPaths(metapaths=self.metapaths, drop_orig_edge_types=False,
-                                    drop_unconnected_node_types=False)(val_data)
+            train_data = AddMetaPaths(
+                metapaths=self.metapaths,
+                drop_orig_edge_types=False,
+                drop_unconnected_node_types=False
+            )(train_data)
+            val_data = AddMetaPaths(
+                metapaths=self.metapaths,
+                drop_orig_edge_types=False,
+                drop_unconnected_node_types=False
+            )(val_data)
 
         return train_data, val_data, test_data, edge_types, rev_edge_types
 
@@ -295,10 +309,13 @@ class Gnn(Team2Vec):
     def create_gnn_model(self, data):
 
         from encoder import Encoder as Encoder
-        if self.model_name == 'lant':
-            model = LANT_Encoder(hidden_channels=self.d, data=data)
-        else:
-            model = Encoder(hidden_channels=self.d, data=data, model_name= self.model_name)
+        # Kap: temporarily commenting out lant_encoder
+        # if self.model_name == 'lant':
+        #     model = LANT_Encoder(hidden_channels=self.d, data=data)
+        # else:
+        #     model = Encoder(hidden_channels=self.d, data=data, model_name= self.model_name)
+        model = Encoder(hidden_channels=self.d, data=data, model_name= self.model_name)
+        
 
         print(model)
         print(f'\nDevice = {self.device}')
@@ -307,44 +324,65 @@ class Gnn(Team2Vec):
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
         return model, optimizer
 
+    def prepare_data(self, data):
+        """Add node IDs to the data before processing"""
+        if isinstance(data, HeteroData):
+            for node_type in data.node_types:
+                # Add sequential node IDs for each node type
+                data[node_type].n_id = torch.arange(data[node_type].x.size(0))
+        else:
+            # For homogeneous graphs
+            data.n_id = torch.arange(data.x.size(0))
+        return data
+
     # create a mbatch for a given split_data (mode = train / val / test)
     def create_mini_batch_loader(self, split_data, seed_edge_type, mode):
-        # Define seed edges:
-        # we pick only a single edge_type to feed edge_label_index (need to verify this approach)
-
-        # neg_sampling in val or test loader causes doubling the edge_label weight producing 2.0 instead of values 1.0 (need to test)
-        neg_sampling_ratio = self.ns                                  # updated after v5
+        """Create a mini batch loader for a given split_data (mode = train / val / test)"""
+        # Add node IDs to the data if not already present
+        split_data = self.prepare_data(split_data)
+        
+        # Define batch size based on mode
         batch_size = self.b if mode == 'train' else (3 * self.b)
         shuffle = True
 
         print(f'mini batch loader for mode {mode}')
+        
         mini_batch_loader = LinkNeighborLoader(
             data=split_data,
             num_neighbors=self.nn,
-            neg_sampling='binary',
-            neg_sampling_ratio=neg_sampling_ratio,             # prev : neg_sampling = None
+            batch_size=batch_size,
             edge_label_index=(seed_edge_type, split_data[seed_edge_type].edge_label_index),
             edge_label=split_data[seed_edge_type].edge_label,
-            batch_size=batch_size,
             shuffle=shuffle,
+            neg_sampling_ratio=self.ns if mode == 'train' else 0.0
         )
+        
         return mini_batch_loader
-
+    
     def learn(self, loader, epochs):
+        """Train the model with improved validation handling."""
         start = time.time()
         epochs_taken = 0
         loss_array = []
         val_auc_array = []
         val_loss_array = []
-        earlystopping = EarlyStopping(patience=5, verbose=True, delta=0.001,
-                                      path=f"{self.model_output}/state_dict_model.e{epochs}.pt", trace_func=print, save_model=False)
+        earlystopping = EarlyStopping(
+            patience=5, 
+            verbose=True, 
+            delta=0.001,
+            path=f"{self.model_output}/state_dict_model.e{epochs}.pt", 
+            trace_func=print,
+            save_model=False
+        )
+
         for epoch in range(1, epochs + 1):
-            self.optimizer.zero_grad()  # ensuring clearing out the gradients before each validation loop
+            self.optimizer.zero_grad()
 
             total_loss = 0
             total_examples = 0
             torch.cuda.empty_cache()
-            # train for loaders of all edge_types, e.g : train_loader['skill','to','team'], train_loader['member','to','team']
+
+            # Training loop
             for seed_edge_type in params.settings['graph']['supervision_edge_types']:
                 print(f'epoch {epoch:03d} : batching for train_loader for seed_edge_type : {seed_edge_type}')
                 for sampled_data in loader[seed_edge_type]:
@@ -352,28 +390,29 @@ class Gnn(Team2Vec):
 
                     sampled_data.to(self.device)
                     pred = self.model(sampled_data, seed_edge_type, self.is_directed)
-                    # The ground_truth and the pred shapes should be 1-dimensional
-                    # we squeeze them after generation
-                    if (type(sampled_data) == HeteroData):
+                    
+                    if isinstance(sampled_data, HeteroData):
                         ground_truth = sampled_data[seed_edge_type].edge_label
                     else:
                         ground_truth = sampled_data.edge_label
+
                     loss = F.binary_cross_entropy_with_logits(pred, ground_truth)
                     loss.backward()
                     self.optimizer.step()
 
-                    total_loss += float(
-                        loss) * pred.numel()  # each batch might not contain same number of predictions, so we normalize it using the individual number of preds each turn
+                    total_loss += float(loss) * pred.numel()
                     total_examples += pred.numel()
+
             avg_loss = (total_loss / total_examples)
-            if (epoch % 10 == 0):
+            if (epoch % 1 == 0):  # Print every epoch
                 print(f"\n.............Epoch: {epoch:03d}, Loss: {avg_loss:.6f}.............\n")
             loss_array.append(avg_loss)
 
+            # Validation
             self.optimizer.zero_grad()
-            ls, auc = self.eval(self.val_loader)
-            val_loss_array.append(ls)
-            val_auc_array.append(auc)
+            val_loss, val_auc = self.eval(self.val_loader)
+            val_loss_array.append(val_loss)
+            val_auc_array.append(val_auc if val_auc is not None else 0.5)
 
             epochs_taken += 1
             earlystopping(val_loss_array[-1], self.model)
@@ -381,44 +420,101 @@ class Gnn(Team2Vec):
                 print(f"Early Stopping Triggered at epoch: {epoch}")
                 break
 
-        # plot the figure and save
-        fig_output = f'{self.model_output}/{self.model_name}.{self.graph_type}.undir.{self.agg}.e{epochs}.ns{int(self.ns)}.b{self.b}.d{self.d}.png'
-        self.plot_graph(torch.arange(1, epochs_taken + 1, 1), loss_array, val_loss_array, fig_output=fig_output)
-        fig_output = f'{self.model_output}/{self.model_name}.{self.graph_type}.undir.{self.agg}.e{epochs}.ns{int(self.ns)}.b{self.b}.d{self.d}.val_auc_per_epoch.png'
-        self.plot_graph(torch.arange(1, epochs_taken + 1, 1), val_auc_array, xlabel='Epochs', ylabel='Val AUC',
-                   title=f'Validation AUC vs Epochs for Embedding Generation', fig_output=fig_output)
-        print(f'\nit took {(time.time() - start) / 60} mins || {(time.time() - start) / 3600} hours to train the model\n')
+        # Plot training curves
+        fig_output = f'{self.model_output}/{self.model_name}.{self.graph_type}.{"dir" if self.dir else "undir"}.{self.agg}.e{epochs}.ns{int(self.ns)}.b{self.b}.d{self.d}'
+        
+        # Loss curve
+        self.plot_graph(
+            torch.arange(1, epochs_taken + 1, 1),
+            loss_array,
+            val_loss_array,
+            fig_output=f"{fig_output}.loss.png"
+        )
+        
+        # AUC curve (only if we have valid AUC values)
+        if any(auc > 0 for auc in val_auc_array):
+            self.plot_graph(
+                torch.arange(1, epochs_taken + 1, 1),
+                val_auc_array,
+                xlabel='Epochs',
+                ylabel='Val AUC',
+                title='Validation AUC vs Epochs',
+                fig_output=f"{fig_output}.val_auc.png"
+            )
 
-    @torch.no_grad
+        print(f'\nTraining completed in {(time.time() - start) / 60:.2f} mins')
+
+    @torch.no_grad()
+    @torch.no_grad()
     def eval(self, loader):
+        """Evaluate the model with handling for single-class cases."""
         preds = []
         ground_truths = []
         total_loss = 0
         total_examples = 0
-        for seed_edge_type in params.settings['graph']['supervision_edge_types']:
-            for sampled_data in loader[seed_edge_type]:
-                sampled_data.to(self.device)
-                tmp_pred = self.model(sampled_data, seed_edge_type, self.is_directed)
-                if (type(sampled_data) == HeteroData):
-                    # we have ground_truths per edge_label_index
-                    tmp_ground_truth = sampled_data[seed_edge_type].edge_label
-                else:
-                    tmp_ground_truth = sampled_data.edge_label
 
-                assert tmp_pred.shape == tmp_ground_truth.shape
-                loss = F.binary_cross_entropy_with_logits(tmp_pred, tmp_ground_truth)
-                total_loss += float(loss) * tmp_pred.numel()
-                total_examples += tmp_pred.numel()
+        try:
+            for seed_edge_type in params.settings['graph']['supervision_edge_types']:
+                for sampled_data in loader[seed_edge_type]:
+                    sampled_data.to(self.device)
+                    tmp_pred = self.model(sampled_data, seed_edge_type, self.is_directed)
+                    if isinstance(sampled_data, HeteroData):
+                        tmp_ground_truth = sampled_data[seed_edge_type].edge_label
+                    else:
+                        tmp_ground_truth = sampled_data.edge_label
 
-                preds.append(tmp_pred)
-                ground_truths.append(tmp_ground_truth)
+                    assert tmp_pred.shape == tmp_ground_truth.shape
+                    loss = F.binary_cross_entropy_with_logits(tmp_pred, tmp_ground_truth)
+                    total_loss += float(loss) * tmp_pred.numel()
+                    total_examples += tmp_pred.numel()
 
-        pred = torch.cat(preds, dim=0).cpu().numpy()
-        ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
-        loss = total_loss / total_examples
-        auc = roc_auc_score(ground_truth, pred)
-        print()
-        print(f'Val loss : {loss:.6f}')
-        print(f"Val AUC: {auc:.6f}\n")
-        # print(f'................... ending eval...................\n')
-        return loss, auc
+                    preds.append(tmp_pred)
+                    ground_truths.append(tmp_ground_truth)
+
+            # Concatenate all predictions and ground truths
+            pred = torch.cat(preds, dim=0).cpu().numpy()
+            ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
+
+            # Calculate average loss
+            avg_loss = total_loss / total_examples
+
+            # Calculate metrics
+            unique_classes = np.unique(ground_truth)
+            if len(unique_classes) < 2:
+                print("\nWarning: Only one class present in validation set")
+                print(f"Unique classes: {unique_classes}")
+                print(f"Number of samples: {len(ground_truth)}")
+                if len(ground_truth) > 0:
+                    print(f"Class distribution: {np.bincount(ground_truth.astype(int))}")
+                auc = None  # AUC undefined for single class
+            else:
+                auc = roc_auc_score(ground_truth, pred)
+
+            # Print evaluation metrics
+            print()
+            print(f'Val loss : {avg_loss:.6f}')
+            if auc is not None:
+                print(f"Val AUC : {auc:.6f}")
+            else:
+                print("Val AUC : undefined (single class)")
+            
+            # Additional debugging information
+            print("\nValidation set statistics:")
+            print(f"Total examples: {total_examples}")
+            print(f"Prediction range: [{pred.min():.3f}, {pred.max():.3f}]")
+            
+            return avg_loss, auc if auc is not None else 0.5  # Return 0.5 when AUC is undefined
+
+        except Exception as e:
+            print("\nError during evaluation:")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error message: {str(e)}")
+            if preds and ground_truths:
+                print("\nDebug information:")
+                print(f"Number of batches: {len(preds)}")
+                print(f"Predictions shape: {pred.shape if 'pred' in locals() else 'N/A'}")
+                print(f"Ground truth shape: {ground_truth.shape if 'ground_truth' in locals() else 'N/A'}")
+                if 'ground_truth' in locals():
+                    print(f"Unique ground truth values: {np.unique(ground_truth)}")
+                    print(f"Ground truth distribution: {np.bincount(ground_truth.astype(int))}")
+            raise e

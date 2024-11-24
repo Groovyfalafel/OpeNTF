@@ -10,11 +10,11 @@ settings = {
                 'b': 128
             },
             'fnn':{
-                'b': 2048,  # batch size
-                'e': 25,  # epoch
+                'b': 128,  # batch size
+                'e': 20,  # epoch
                 'l': [128],  # list of number of nodes in each layer
                 'loss': 'normal', # 'SL'-> superloss, 'DP' -> Data Parameters, 'normal' -> Binary Cross Entropy 'pos-ce' -> positive ce, 'weighted' -> weighted ce
-                'lr': 0.0001,  # learning rate
+                'lr': 0.1,  # learning rate
                 'nns': 3,  # number of negative samples
                 'ns': 'uniform',  # 'none', 'uniform', 'unigram', 'unigram_b'
                 'weight': 2.5, # weight if ns == 'weighted'
@@ -31,11 +31,11 @@ settings = {
                 'loss': 'normal',  # 'SL'-> superloss, 'DP' -> Data Parameters, 'normal' -> Binary Cross Entropy
             },
             'bnn':{
-                'b': 2048,  # batch size
-                'e': 25,  # epoch
+                'b': 128,  # batch size
+                'e': 20,  # epoch
                 'l': [128],  # list of number of nodes in each layer
                 'loss': 'normal',  # 'SL'-> superloss, 'DP' -> Data Parameters, 'normal' -> Binary Cross Entropy
-                'lr': 0.01,  # learning rate
+                'lr': 0.1,  # learning rate
                 'nns': 3,  # number of negative samples
                 'ns': 'uniform',  # 'uniform', 'unigram', 'unigram_b'
                 's': 1,  # # sample_elbo for bnn
@@ -49,12 +49,12 @@ settings = {
                 'with_zero': True
             },
             'emb':{
-                'e': 100,# max epoch
+                'e': 5,# max epoch
                 'd': 128,# embedding dimension
                 'dm': 1,# training algorithm. 1: distributed memory (PV-DM), 0: distributed bag of words (PV-DBOW)
                 'w': 1, #cooccurrence window
                 'b' : 128, # 0 means no batching
-                'ns' : 2,
+                'ns' : 5,
             }
         },
         'cmd':['train', 'test', 'eval'],

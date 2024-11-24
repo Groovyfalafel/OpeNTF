@@ -13,11 +13,11 @@ dependencies:
     - tqdm==4.60.0
     - PyYAML==5.4
     - scikit_learn==0.24.2
-    - OpenNMT-py==2.2.0
+    # - OpenNMT-py==2.2.0
     - pandas==1.3.3
     - pytrec-eval-terrier==0.5.2
     - gensim==3.8.3
     - python-dateutil==2.8.2
-    - reranking==0.3.6 # required by Adila submodule
+    # - reranking==0.3.6 # required by Adila submodule
 
   #schedule
