@@ -126,8 +126,8 @@ def run(data_list, domain_list, fair, filter, future, model_list, output, exp_id
     # model names having _dt2v means that they learn the input embedding with doc2vec where input is (skills + year)
 
     # tgnn models
-    if 'tgnn_fnn' in model_list: models['tgnn_fnn'] = ChronologicalFnn()
-    if 'tgnn_bnn' in model_list: models['tgnn_bnn'] = ChronologicalBnn()
+    if 'fnn_tgnn' in model_list: models['tgnn_fnn'] = ChronologicalFnn()
+    if 'bnn_tgnn' in model_list: models['tgnn_bnn'] = ChronologicalBnn()
 
     # non-temporal (no streaming scenario, bag of teams)
     if 'random' in model_list: models['random'] = Rnd()
