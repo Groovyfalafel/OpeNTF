@@ -30,29 +30,79 @@ from cmn.tools import generate_popular_and_nonpopular
 class ChronologicalMixin:
     """Mixin class to add chronological ordering functionality"""
     def get_chronological_indices(self, train_idx, indexes):
-        # Get year for each team
-        team_years = [indexes['i2y'][i][0] for i in range(len(indexes['i2y']))]
+        """
+        Get chronologically sorted indices based on year information
+        """
+        # Convert i2y into year ranges
+        year_ranges = []
+        for i in range(len(indexes['i2y'])-1):
+            start_idx = indexes['i2y'][i][0]
+            end_idx = indexes['i2y'][i+1][0]-1  # End idx is start of next year minus 1
+            year = indexes['i2y'][i][1]
+            year_ranges.append((start_idx, end_idx, year))
         
-        # Create pairs of indices and years for training data
-        train_with_years = [(idx, team_years[idx]) for idx in train_idx]
+        # Add the last year range
+        last_start = indexes['i2y'][-1][0]
+        last_year = indexes['i2y'][-1][1]
+        year_ranges.append((last_start, float('inf'), last_year))  # Use inf for last range
         
-        # Sort by year
-        train_with_years.sort(key=lambda x: x[1])
+        # Map each index to its year
+        def get_year_for_index(idx):
+            for start, end, year in year_ranges:
+                if start <= idx <= end:
+                    return year
+            # If no range found, use the year of the closest range
+            if idx < year_ranges[0][0]:
+                return year_ranges[0][2]
+            return year_ranges[-1][2]
         
-        # Extract sorted indices
+        # Create and sort index-year pairs
+        train_with_years = [(idx, get_year_for_index(idx)) for idx in train_idx]
+        train_with_years.sort(key=lambda x: (x[1], x[0]))  # Sort by year, then by index
+        
+        # Print some debug information
+        print(f"First few year ranges: {year_ranges[:3]}")
+        print(f"Sample of index-year mappings: {train_with_years[:5]}")
+        
         return [pair[0] for pair in train_with_years]
 
 class ChronologicalFnn(ChronologicalMixin, Fnn):
-    def train(self, train_idx, valid_idx, vecs, indexes, output, settings):
-        """Train the FNN model with data ordered chronologically by year"""
-        chronological_train_idx = self.get_chronological_indices(train_idx, indexes)
-        super().train(chronological_train_idx, valid_idx, vecs, indexes, output, settings)
+    def learn(self, splits, indexes, vecs, settings, device, output):
+        """Override the learn method to handle chronological ordering"""
+        print("Starting chronological FNN learn...")
+        print(f"Number of folds: {len(splits['folds'])}")
+        
+        for k in splits['folds']:
+            train_idx = splits['folds'][k]['train']
+            valid_idx = splits['folds'][k]['valid']
+            
+            print(f"Fold {k} - Train size before sorting: {len(train_idx)}")
+            # Sort training indices chronologically
+            chronological_train_idx = self.get_chronological_indices(train_idx, indexes)
+            splits['folds'][k]['train'] = chronological_train_idx
+            print(f"Fold {k} - Train size after sorting: {len(chronological_train_idx)}")
+            
+        # Call parent's learn method with modified splits
+        super().learn(splits, indexes, vecs, settings, device, output)
 
 class ChronologicalBnn(ChronologicalMixin, Bnn):
-    def train(self, train_idx, valid_idx, vecs, indexes, output, settings):
-        """Train the BNN model with data ordered chronologically by year"""
-        chronological_train_idx = self.get_chronological_indices(train_idx, indexes)
-        super().train(chronological_train_idx, valid_idx, vecs, indexes, output, settings)
+    def learn(self, splits, indexes, vecs, settings, device, output):
+        """Override the learn method to handle chronological ordering"""
+        print("Starting chronological BNN learn...")
+        print(f"Number of folds: {len(splits['folds'])}")
+        
+        for k in splits['folds']:
+            train_idx = splits['folds'][k]['train']
+            valid_idx = splits['folds'][k]['valid']
+            
+            print(f"Fold {k} - Train size before sorting: {len(train_idx)}")
+            # Sort training indices chronologically
+            chronological_train_idx = self.get_chronological_indices(train_idx, indexes)
+            splits['folds'][k]['train'] = chronological_train_idx
+            print(f"Fold {k} - Train size after sorting: {len(chronological_train_idx)}")
+            
+        # Call parent's learn method with modified splits
+        super().learn(splits, indexes, vecs, settings, device, output)
 
 
 
